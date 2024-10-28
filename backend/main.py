@@ -1,7 +1,7 @@
 # main.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import pinecone
+from pinecone import Pinecone, Index , ServerlessSpec
 import snowflake.connector
 import os
 from dotenv import load_dotenv
@@ -9,11 +9,17 @@ import requests
 import boto3
 from botocore.client import Config
 from urllib.parse import urlparse
+from langchain_nvidia_ai_endpoints import ChatNVIDIA,NVIDIAEmbeddings
+import logging
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
+
+nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+pinecone_api_key = os.getenv("PINECONE_API_KEY")
+pinecone_project_id = os.getenv("PINECONE_PROJECT_ID")
 
 # Initialize Snowflake connection
 def init_snowflake():
@@ -29,23 +35,37 @@ def init_snowflake():
 
 # Initialize Pinecone
 def init_pinecone():
-    pinecone.init(
-        api_key=os.getenv('PINECONE_API_KEY'),
-        environment=os.getenv('PINECONE_ENV')
-    )
+    # Initialize Pinecone client
+    print("PINECONE_API_KEY:", pinecone_api_key)
+    print("PINECONE_HOST:", os.getenv("PINECONE_HOST"))
 
-    index_name = 'research-notes'
+    pinecone_client = Pinecone(api_key=pinecone_api_key)
 
-    # Only connect to the existing index without attempting to create a new one
-    if index_name in pinecone.list_indexes():
-        index = pinecone.Index(index_name)
-        return index
-    else:
-        # Raise an error if the index doesn't exist
-        raise HTTPException(
-            status_code=500,
-            detail="Pinecone index 'research-notes' not found. Please create the index manually in your Pinecone console."
+    # Define the index name
+    index_name = 'research-notes'  # Ensure this matches the index you created
+
+    # Retrieve the host URL for the index from an environment variable or Pinecone dashboard
+    index_host = os.getenv('PINECONE_HOST')
+
+    # List available indexes
+    available_indexes = [index.name for index in pinecone_client.list_indexes()]
+    print("Available indexes:", available_indexes)
+
+    # Check if the index exists, create if it doesn't
+    if index_name not in available_indexes:
+        pinecone_client.create_index(
+            name=index_name,
+            dimension=1024,  # Replace with your model dimensions
+            metric="cosine",  # Replace with your model metric
+            spec=ServerlessSpec(
+                cloud="aws",
+                region="us-east-1"
+            )
         )
+
+    # Connect to the existing index using the Index class with the host argument
+    index = Index(index_name, host=index_host)
+    return index
 
 # Define data models
 class Document(BaseModel):
@@ -143,30 +163,35 @@ def get_document_details(title: str):
 # Submit a user question and return an answer
 @app.post("/ask")
 def ask_question(query: Query):
-    # Retrieve vector embeddings for research notes
-    index = init_pinecone()
-    # Convert user question to vector
-    question_embedding = get_embedding(query.question)
-    # Query relevant research notes for the document in Pinecone
+    try:
+        # Retrieve vector embeddings for research notes
+        index = init_pinecone()
+        
+        # Convert user question to vector
+        question_embedding = get_embedding(query.question)
+        
+        # Perform similarity query in Pinecone
+        results = index.query(
+            vector=question_embedding,
+            top_k=50,
+            include_metadata=True
+        )
 
-    # Perform similarity query in Pinecone
-    results = index.query(
-        vector=question_embedding,
-        top_k=50,
-        include_metadata=True
-    )
+        # Filter notes relevant to the document
+        related_notes = []
+        for match in results['matches']:
+            if match['metadata']['title'] == query.title:
+                related_notes.append(match['metadata']['note_text'])
+                if len(related_notes) >= 5:
+                    break  # Limit to the top 5 related notes
 
-    # Filter notes relevant to the document
-    related_notes = []
-    for match in results['matches']:
-        if match['metadata']['title'] == query.title:
-            related_notes.append(match['metadata']['note_text'])
-            if len(related_notes) >= 5:
-                break  # Limit to the top 5 related notes
+        # Generate answer using NVIDIA model
+        answer = generate_answer_with_nvidia_model(query.question, related_notes, nvidia_api_key)
+        return {"answer": answer}
 
-    # Generate answer using NVIDIA model
-    answer = generate_answer_with_nvidia_model(query.question, related_notes, None)
-    return {"answer": answer}
+    except Exception as e:
+        logging.error(f"Error processing question: {str(e)}")
+        raise HTTPException(status_code=500, detail="An error occurred while processing the question.")
 
 # Save research note
 @app.post("/save_note")
@@ -193,69 +218,36 @@ def save_research_note(note: ResearchNote):
 
 # Helper function: Get text embeddings
 def get_embedding(text):
-    import nemo.collections.nlp as nemo_nlp
-    import torch
+    # Initialize the NVIDIA embeddings client
+    client = NVIDIAEmbeddings(
+        model="nvidia/llama-3.2-nv-embedqa-1b-v1", 
+        api_key=os.getenv('NVIDIA_API_KEY'),  # Load API key from environment variable
+        truncate="NONE"
+    )
 
-    # 選擇預訓練的模型
-    model_name = 'megatron-bert-345m-uncased'
-    model = nemo_nlp.models.MegatronBertEncoderModel.from_pretrained(model_name)
-    model.eval()
-
-    # Tokenize the input text
-    tokenizer = nemo_nlp.modules.get_tokenizer(tokenizer_name='bert-base-uncased')
-    tokens = tokenizer(text, return_tensors='pt', truncation=True, max_length=512)
-
-    # Move tensors to GPU if available
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokens = {k: v.to(device) for k, v in tokens.items()}
-    model.to(device)
-
-    with torch.no_grad():
-        outputs = model(input_ids=tokens['input_ids'], attention_mask=tokens['attention_mask'])
-        embeddings = outputs.last_hidden_state
-
-    # 將 embeddings 轉換為一維的 numpy array
-    embedding_vector = embeddings.mean(dim=1).squeeze().cpu().numpy()
-
-    return embedding_vector.tolist()
+    # Generate the embedding for the input text
+    embedding = client.embed_query(text)
+    
+    return embedding
 
 # Helper function: Generate answer using NVIDIA model
 def generate_answer_with_nvidia_model(question, context_list, api_key):
-    import nemo.collections.nlp as nemo_nlp
-    import torch
+    # Initialize the NVIDIA model client
+    client = ChatNVIDIA(
+        model="meta/llama-3.2-3b-instruct",
+        api_key=api_key, 
+        temperature=0.2,
+        top_p=0.7,
+        max_tokens=1024,
+    )
 
     # Combine context_list into a single context string
     context = ' '.join(context_list)
     prompt = f"{context}\nQuestion: {question}\nAnswer:"
 
-    # Load the pre-trained GPT model for text generation
-    model_name = 'gpt3-345m'
-    model = nemo_nlp.models.GPTModel.from_pretrained(model_name)
-    model.eval()
+    # Stream the response from the model
+    answer = ""
+    for chunk in client.stream([{"role": "user", "content": prompt}]):
+        answer += chunk.content
 
-    # Move model to GPU if available
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
-
-    # Generate answer
-    tokens_to_generate = 128
-    input_tokens = model.tokenizer(prompt, return_tensors='pt')['input_ids'].to(device)
-
-    with torch.no_grad():
-        generated_tokens = model.generate(
-            input_ids=input_tokens,
-            max_length=input_tokens.shape[1] + tokens_to_generate,
-            do_sample=True,
-            top_k=50,
-            top_p=0.95,
-            temperature=0.7,
-            num_return_sequences=1
-        )
-
-    # Decode the generated tokens
-    generated_text = model.tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
-
-    # Extract the answer part from the generated text
-    answer = generated_text[len(prompt):].strip()
-
-    return answer
+    return answer.strip()

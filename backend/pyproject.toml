@@ -4,15 +4,17 @@ version = "0.1.0"
 description = ""
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = ">=3.10,<3.12"
 fastapi = "^0.115.3"
 uvicorn = "^0.32.0"
 nvidia-ml-py3 = "^7.352.0"
 boto3 = "^1.35.49"
 torch = "^2.5.0"
-pinecone-client = "2.2.2"
+pinecone-client = "^5.0.1"
+langchain-nvidia-ai-endpoints = "^0.3.3"
 
 
 [build-system]
