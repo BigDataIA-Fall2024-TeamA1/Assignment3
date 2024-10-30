@@ -15,7 +15,13 @@ boto3 = "^1.35.49"
 torch = "^2.5.0"
 pinecone-client = "^5.0.1"
 langchain-nvidia-ai-endpoints = "^0.3.3"
-
+llama-index = "0.11.20"
+langchain = "^0.3.4"
+pymilvus = "^2.4.9"
+uuid = "^1.30"
+llama-index-vector-stores-milvus = "^0.2.7"
+llama-index-embeddings-nvidia = "^0.2.4"
+llama-index-llms-nvidia = "^0.2.6"
 
 [build-system]
 requires = ["poetry-core"]

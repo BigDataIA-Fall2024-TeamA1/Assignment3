@@ -1,12 +1,138 @@
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
+import os
+import streamlit as st
+from llama_index.core import Settings
+from llama_index.core import VectorStoreIndex, StorageContext
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.embeddings.nvidia import NVIDIAEmbedding
+from llama_index.llms.nvidia import NVIDIA
 
-client = ChatNVIDIA(
-  model="meta/llama-3.2-3b-instruct",
-  api_key="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", 
-  temperature=0.2,
-  top_p=0.7,
-  max_tokens=1024,
-)
+from document_processors import load_multimodal_data, load_data_from_directory
+from utils import set_environment_variables
 
-for chunk in client.stream([{"role":"user","content":"Write a limerick about the wonders of GPU computing."}]): 
-  print(chunk.content, end="")
+# Import pymilvus for Zilliz Cloud connection
+from pymilvus import connections, Collection, FieldSchema, DataType, CollectionSchema
+
+# Set up the page configuration
+st.set_page_config(layout="wide")
+
+# Initialize settings
+def initialize_settings():
+    Settings.embed_model = NVIDIAEmbedding(model="nvidia/nv-embedqa-e5-v5", truncate="END")
+    Settings.llm = NVIDIA(model="meta/llama-3.1-70b-instruct")
+    Settings.text_splitter = SentenceSplitter(chunk_size=600)
+
+# Create index from documents using Zilliz Cloud
+def create_index(documents):
+    # Connect to Zilliz Cloud
+    connections.connect(
+        alias="zilliz_cloud",
+        uri=os.getenv("ZILLIZ_CLOUD_URI"),       # e.g., "https://your-zilliz-cloud-instance.zilliz.com"
+        user=os.getenv("ZILLIZ_USERNAME"),       # Your Zilliz Cloud username
+        password=os.getenv("ZILLIZ_PASSWORD")    # Your Zilliz Cloud password
+    )
+    
+    # Define your collection schema
+    fields = [
+        FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=1024, description="Embedding vectors"),
+        # Add more fields if necessary, e.g., metadata fields
+    ]
+    schema = CollectionSchema(fields, description="Multimodal RAG collection")
+    
+    collection_name = os.getenv("ZILLIZ_COLLECTION_NAME", "multimodal_rag_collection")
+    
+    # Check if the collection already exists; if not, create it
+    if Collection.exists(collection_name):
+        collection = Collection(name=collection_name)
+    else:
+        collection = Collection(name=collection_name, schema=schema)
+    
+    # Initialize the VectorStoreIndex with the Zilliz collection
+    from llama_index.vector_stores.pymilvus import PyMilvusVectorStore
+    
+    vector_store = PyMilvusVectorStore(
+        collection=collection,
+        embedding_dim=1024,
+        embedding_field="vector",
+        primary_field="id",
+        index_params={
+            "index_type": "IVF_FLAT",
+            "metric_type": "L2",
+            "params": {"nlist": 128}
+        }
+    )
+    
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    return VectorStoreIndex.from_documents(documents, storage_context=storage_context)
+
+# Main function to run the Streamlit app
+def main():
+    set_environment_variables()
+    initialize_settings()
+
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.title("Multimodal RAG")
+        
+        input_method = st.radio("Choose input method:", ("Upload Files", "Enter Directory Path"))
+        
+        if input_method == "Upload Files":
+            uploaded_files = st.file_uploader("Drag and drop files here", accept_multiple_files=True)
+            if uploaded_files and st.button("Process Files"):
+                with st.spinner("Processing files..."):
+                    documents = load_multimodal_data(uploaded_files)
+                    st.session_state['index'] = create_index(documents)
+                    st.session_state['history'] = []
+                    st.success("Files processed and index created!")
+        else:
+            directory_path = st.text_input("Enter directory path:")
+            if directory_path and st.button("Process Directory"):
+                if os.path.isdir(directory_path):
+                    with st.spinner("Processing directory..."):
+                        documents = load_data_from_directory(directory_path)
+                        st.session_state['index'] = create_index(documents)
+                        st.session_state['history'] = []
+                        st.success("Directory processed and index created!")
+                else:
+                    st.error("Invalid directory path. Please enter a valid path.")
+    
+    with col2:
+        if 'index' in st.session_state:
+            st.title("Chat")
+            if 'history' not in st.session_state:
+                st.session_state['history'] = []
+            
+            query_engine = st.session_state['index'].as_query_engine(similarity_top_k=20, streaming=True)
+
+            user_input = st.chat_input("Enter your query:")
+
+            # Display chat messages
+            chat_container = st.container()
+            with chat_container:
+                for message in st.session_state['history']:
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"])
+
+            if user_input:
+                with st.chat_message("user"):
+                    st.markdown(user_input)
+                st.session_state['history'].append({"role": "user", "content": user_input})
+                
+                with st.chat_message("assistant"):
+                    message_placeholder = st.empty()
+                    full_response = ""
+                    response = query_engine.query(user_input)
+                    for token in response.response_gen:
+                        full_response += token
+                        message_placeholder.markdown(full_response + "▌")
+                    message_placeholder.markdown(full_response)
+                st.session_state['history'].append({"role": "assistant", "content": full_response})
+
+            # Add a clear button
+            if st.button("Clear Chat"):
+                st.session_state['history'] = []
+                st.experimental_rerun()
+
+if __name__ == "__main__":
+    main()
