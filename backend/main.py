@@ -13,11 +13,13 @@ import time
 from llama_index.core import Settings
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.vector_stores.milvus import MilvusVectorStore
+from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.nvidia import NVIDIAEmbedding
 from llama_index.llms.nvidia import NVIDIA
 
-from pymilvus import connections
+from pinecone import Pinecone  # Import Pinecone client
+from llama_index.core.schema import Document as LlamaDocument
+
 
 # Load environment variables
 load_dotenv()
@@ -28,17 +30,14 @@ app = FastAPI()
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
 
 # Validate environment variables
 required_env_vars = [
-    "ZILLIZ_CLOUD_URI",
-    "ZILLIZ_USERNAME",
-    "ZILLIZ_PASSWORD",
-    "ZILLIZ_COLLECTION_NAME",
+    "PINECONE_API_KEY",
+    "PINECONE_ENV",
+    "PINECONE_INDEX_NAME",
     "SNOWFLAKE_USER",
     "SNOWFLAKE_PASSWORD",
     "SNOWFLAKE_ACCOUNT",
@@ -85,49 +84,40 @@ def initialize_llama_index_settings():
     Settings.text_splitter = SentenceSplitter(chunk_size=600)
     logging.info("llama_index settings initialized successfully.")
 
-# 初始化连接到 Zilliz Cloud
-def initialize_zilliz_connection():
+# Initialize Pinecone connection
+def initialize_pinecone_connection():
     try:
-        connections.connect(
-            alias="default",
-            uri=os.getenv("ZILLIZ_CLOUD_URI"),  # 例如 "ssl://<host>:<port>"
-            user=os.getenv("ZILLIZ_USERNAME"),  # 如果需要
-            password=os.getenv("ZILLIZ_PASSWORD")  # 如果需要
-        )
-        logging.info("Connected to Zilliz Cloud successfully.")
+        Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=os.getenv("PINECONE_ENV"))
+        logging.info("Connected to Pinecone successfully.")
     except Exception as e:
-        logging.error(f"Failed to connect to Zilliz Cloud: {e}")
+        logging.error(f"Failed to connect to Pinecone: {e}")
         raise
 
-# Create and initialize the index using llama_index
+# Create and initialize the index using llama_index with Pinecone
 def create_llama_index(documents, service_context):
     try:
-        # 初始化 ZillizCloudVectorStore
-        vector_store = MilvusVectorStore(
-            using="default",  # 使用上面连接的 alias
-            collection_name=os.getenv("ZILLIZ_COLLECTION_NAME", "research_notes_collection"),
-            dim=1024,
-            index_type="IVF_FLAT",
-            metric_type="L2",
-            params={"nlist": 128}
+        # Initialize Pinecone Vector Store
+        vector_store = PineconeVectorStore(
+            index_name=os.getenv("PINECONE_INDEX_NAME"),
+            dimension=1024
         )
-        logging.info("MilvusVectorStore initialized successfully with Zilliz Cloud.")
-        
-        # 创建 StorageContext
+        logging.info("PineconeVectorStore initialized successfully.")
+
+        # Create StorageContext
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         
-        # 创建 VectorStoreIndex 从文档
+        # Create VectorStoreIndex from documents
         index = VectorStoreIndex.from_documents(
             documents,
             storage_context=storage_context,
             service_context=service_context
         )
-        logging.info("VectorStoreIndex created successfully.")
+        logging.info("VectorStoreIndex created successfully with Pinecone.")
         logging.info(f"Total documents indexed: {len(documents)}")
         
         return index
     except Exception as e:
-        logging.error(f"Failed to create VectorStoreIndex: {e}")
+        logging.error(f"Failed to create VectorStoreIndex with Pinecone: {e}")
         raise
 
 # Function to load documents from Snowflake
@@ -135,16 +125,16 @@ def load_documents_from_snowflake():
     try:
         conn = init_snowflake()
         cursor = conn.cursor()
-        # 修改后的 SQL 查询，仅选择存在的列
         cursor.execute("SELECT TITLE, NOTE_TEXT FROM RESEARCH_NOTES;")
         rows = cursor.fetchall()
-        documents = []
-        for row in rows:
-            doc = {
-                "title": row[0],
-                "note_text": row[1]
-            }
-            documents.append(doc)
+        documents = [
+            LlamaDocument(
+                doc_id=row[0],  # Assuming TITLE is unique and can serve as doc_id
+                content=row[1],
+                metadata={"title": row[0]}
+            )
+            for row in rows
+        ]
         cursor.close()
         conn.close()
         logging.info(f"Loaded {len(documents)} documents from Snowflake.")
@@ -153,33 +143,19 @@ def load_documents_from_snowflake():
         logging.error(f"Error loading documents from Snowflake: {e}")
         raise
 
-# Function to keep the collection loaded (keep-alive)
-# Function to keep the collection loaded (keep-alive)
-def keep_collection_loaded(vector_store, interval=300):
-    while True:
-        try:
-            if not vector_store.is_collection_loaded():
-                vector_store.load_collection()
-                logging.info(f"Collection '{vector_store.collection_name}' reloaded into memory (keep-alive).")
-            else:
-                logging.info(f"Collection '{vector_store.collection_name}' is already loaded.")
-        except Exception as e:
-            logging.error(f"Error in keep-alive for collection '{vector_store.collection_name}': {e}")
-        time.sleep(interval)  # Wait for the specified interval before checking again
-
-
-# Initialize llama_index and create indexF
+# Initialize llama_index and create index
 def initialize_index():
+    initialize_pinecone_connection()  # Initialize Pinecone connection first
     service_context = initialize_llama_index_settings()
     documents = load_documents_from_snowflake()
     index = create_llama_index(documents, service_context)
     return index
 
-
 # Define data models
-class Document(BaseModel):
+class ResearchDocument(BaseModel):
     title: str
     note_text: str
+    
 
 class Query(BaseModel):
     title: str  # Use document title as identifier
@@ -332,10 +308,11 @@ def save_research_note(note: ResearchNote):
 
         # Vectorize note and store in llama_index
         # Create a document dictionary
-        new_document = {
-            "title": note.title,
-            "note_text": note.note_text
-        }
+        new_document = LlamaDocument(
+            doc_id=note.title,  # Ensure this is unique
+            content=note.note_text,
+            metadata={"title": note.title}
+        )
 
         # Add the new document to the index
         llama_index.insert_documents([new_document])

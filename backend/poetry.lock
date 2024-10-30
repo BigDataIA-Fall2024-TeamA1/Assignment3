@@ -1506,6 +1506,21 @@ llama-index-core = ">=0.11.0,<0.12.0"
 pymilvus = ">=2.3.6,<3.0.0"
 
 [[package]]
+name = "llama-index-vector-stores-pinecone"
+version = "0.2.1"
+description = "llama-index vector_stores pinecone integration"
+optional = false
+python-versions = "<3.13,>=3.8.1"
+files = [
+    {file = "llama_index_vector_stores_pinecone-0.2.1-py3-none-any.whl", hash = "sha256:b1e9f5d7292daddd08949bf6648f3147ecedb52bc7c8a224261e0bc4001e7a91"},
+    {file = "llama_index_vector_stores_pinecone-0.2.1.tar.gz", hash = "sha256:957d6d61d8f7325b6e51e952100d152211c22fc53d6ec6cfc8826af99d2be421"},
+]
+
+[package.dependencies]
+llama-index-core = ">=0.11.0,<0.12.0"
+pinecone-client = ">=3.2.2,<6.0.0"
+
+[[package]]
 name = "llama-parse"
 version = "0.5.12"
 description = "Parse files into RAG-Optimized formats."
@@ -3917,4 +3932,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.12"
-content-hash = "99715eb84508ae027434828cb4916d974545a70370a030ebe4ec3c46f1166603"
+content-hash = "aba9dda75484393fac8baa4465b5a266137159ce5ad49e028a4082f19d4f7080"

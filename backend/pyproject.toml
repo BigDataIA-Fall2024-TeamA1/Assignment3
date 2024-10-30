@@ -22,6 +22,7 @@ uuid = "^1.30"
 llama-index-vector-stores-milvus = "^0.2.7"
 llama-index-embeddings-nvidia = "^0.2.4"
 llama-index-llms-nvidia = "^0.2.6"
+llama-index-vector-stores-pinecone = "^0.2.1"
 
 [build-system]
 requires = ["poetry-core"]
