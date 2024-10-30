@@ -8,9 +8,10 @@ from botocore.client import Config
 from urllib.parse import urlparse
 import logging
 import time
+from contextlib import asynccontextmanager
 
 # Import llama_index components
-from llama_index.core import Settings
+from llama_index.core import Settings  # Updated import
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.pinecone import PineconeVectorStore
@@ -20,11 +21,8 @@ from llama_index.llms.nvidia import NVIDIA
 from pinecone import Pinecone  # Import Pinecone client
 from llama_index.core.schema import Document as LlamaDocument
 
-
 # Load environment variables
 load_dotenv()
-
-app = FastAPI()
 
 # Configure logging with timestamps and levels
 logging.basicConfig(
@@ -33,27 +31,10 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-# Validate environment variables
-required_env_vars = [
-    "PINECONE_API_KEY",
-    "PINECONE_ENV",
-    "PINECONE_INDEX_NAME",
-    "SNOWFLAKE_USER",
-    "SNOWFLAKE_PASSWORD",
-    "SNOWFLAKE_ACCOUNT",
-    "SNOWFLAKE_WAREHOUSE",
-    "SNOWFLAKE_DATABASE",
-    "SNOWFLAKE_SCHEMA",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_REGION",
-    "AWS_BUCKET",
-    "NVIDIA_API_KEY",
-]
+app = FastAPI()
 
-missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-if missing_vars:
-    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
+# Global variable to hold the index
+llama_index = None
 
 # Initialize Snowflake connection
 def init_snowflake():
@@ -76,10 +57,12 @@ def init_snowflake():
 def initialize_llama_index_settings():
     Settings.embed_model = NVIDIAEmbedding(
         model="nvidia/nv-embedqa-e5-v5", 
-        truncate="END"
+        truncate="END",
+        api_key=os.getenv("NVIDIA_API_KEY")
     )
     Settings.llm = NVIDIA(
-        model="meta/llama-3.1-70b-instruct"
+        model="meta/llama-3.2-3b-instruct",
+        api_key=os.getenv("NVIDIA_API_KEY")
     )
     Settings.text_splitter = SentenceSplitter(chunk_size=600)
     logging.info("llama_index settings initialized successfully.")
@@ -94,23 +77,22 @@ def initialize_pinecone_connection():
         raise
 
 # Create and initialize the index using llama_index with Pinecone
-def create_llama_index(documents, service_context):
+def create_llama_index(documents):
     try:
         # Initialize Pinecone Vector Store
         vector_store = PineconeVectorStore(
             index_name=os.getenv("PINECONE_INDEX_NAME"),
-            dimension=1024
+            dimension=768  # Ensure this matches the embedding dimension
         )
         logging.info("PineconeVectorStore initialized successfully.")
 
-        # Create StorageContext
+        # Create StorageContext with the VectorStore
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        
-        # Create VectorStoreIndex from documents
+
+        # Create VectorStoreIndex from documents using the storage_context
         index = VectorStoreIndex.from_documents(
             documents,
-            storage_context=storage_context,
-            service_context=service_context
+            storage_context=storage_context
         )
         logging.info("VectorStoreIndex created successfully with Pinecone.")
         logging.info(f"Total documents indexed: {len(documents)}")
@@ -119,6 +101,7 @@ def create_llama_index(documents, service_context):
     except Exception as e:
         logging.error(f"Failed to create VectorStoreIndex with Pinecone: {e}")
         raise
+
 
 # Function to load documents from Snowflake
 def load_documents_from_snowflake():
@@ -130,7 +113,7 @@ def load_documents_from_snowflake():
         documents = [
             LlamaDocument(
                 doc_id=row[0],  # Assuming TITLE is unique and can serve as doc_id
-                content=row[1],
+                text=row[1],     # Changed from 'content' to 'text'
                 metadata={"title": row[0]}
             )
             for row in rows
@@ -143,34 +126,41 @@ def load_documents_from_snowflake():
         logging.error(f"Error loading documents from Snowflake: {e}")
         raise
 
-# Initialize llama_index and create index
-def initialize_index():
-    initialize_pinecone_connection()  # Initialize Pinecone connection first
-    service_context = initialize_llama_index_settings()
-    documents = load_documents_from_snowflake()
-    index = create_llama_index(documents, service_context)
-    return index
+# Lifespan Event Handler
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global llama_index
+    try:
+        initialize_pinecone_connection()  # Initialize Pinecone connection first
+        initialize_llama_index_settings()  # Configure LlamaIndex settings
+        documents = load_documents_from_snowflake()  # Load documents from Snowflake
+        llama_index = create_llama_index(documents)  # Create the index
+        yield
+    finally:
+        # Shutdown actions (if any)
+        if llama_index:
+            # Perform any necessary cleanup for llama_index
+            del llama_index
+        logging.info("Application shutdown complete.")
+
+# Attach the lifespan to the FastAPI app
+app = FastAPI(lifespan=lifespan)
 
 # Define data models
 class ResearchDocument(BaseModel):
     title: str
     note_text: str
-    
 
 class Query(BaseModel):
-    title: str  # Use document title as identifier
-    question: str
+    question: str  # Removed 'title' as it's unused
 
 class ResearchNote(BaseModel):
     title: str  # Use document title as identifier
     note_text: str
 
-# Initialize llama_index
-llama_index = initialize_index()
-
 # Get list of documents
 @app.get("/documents")
-def get_documents():
+async def get_documents():
     try:
         conn = init_snowflake()
         cursor = conn.cursor()
@@ -187,7 +177,7 @@ def get_documents():
 
 # Get document details
 @app.get("/documents/{title}")
-def get_document_details(title: str):
+async def get_document_details(title: str):
     try:
         conn = init_snowflake()
         cursor = conn.cursor()
@@ -263,35 +253,42 @@ def get_document_details(title: str):
 
 # Submit a user question and return an answer
 @app.post("/ask")
-def ask_question(query: Query):
+async def ask_question(query: Query):
     try:
-        # 使用 llama_index 的查询引擎
-        query_engine = llama_index.as_query_engine(similarity_top_k=5, streaming=False)  # 设置 streaming=False 进行测试
+        if llama_index is None:
+            logging.error("llama_index is not initialized.")
+            raise HTTPException(status_code=500, detail="Service not initialized.")
+        
+        # Use the globally initialized llama_index
+        query_engine = llama_index.as_query_engine(similarity_top_k=5, streaming=False)
         logging.info(f"Executing query: {query.question}")
 
-        response = query_engine.query(query.question)  # 移除 filters 参数
+        response = query_engine.query(query.question)
         logging.info(f"Raw response from query engine: {response}")
 
-        # 根据 llama_index 的响应结构提取答案
-        # 假设 response 有一个 'response' 属性包含答案
+        # Check if response is None or empty
+        if response is None:
+            logging.error("Received empty response from query engine.")
+            raise HTTPException(status_code=500, detail="No response from the query engine.")
+
+        # Extract the answer
         if hasattr(response, 'response'):
             answer = response.response
         else:
-            answer = str(response)  # 备用方案
+            answer = str(response)  # Fallback if 'response' attribute doesn't exist
 
-        logging.info(f"Generated answer for question on document '{query.title}': {answer}")
+        logging.info(f"Generated answer for question: {answer}")
         return {"answer": answer}
 
     except HTTPException as he:
         raise he
     except Exception as e:
-        logging.error(f"Error processing question: {e}")
+        logging.error(f"Error processing question: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while processing the question.")
-
 
 # Save research note
 @app.post("/save_note")
-def save_research_note(note: ResearchNote):
+async def save_research_note(note: ResearchNote):
     try:
         # Save note to Snowflake
         conn = init_snowflake()
@@ -306,22 +303,22 @@ def save_research_note(note: ResearchNote):
         conn.close()
         logging.info(f"Saved research note for document '{note.title}' to Snowflake.")
 
-        # Vectorize note and store in llama_index
-        # Create a document dictionary
+        # Create a Document object
         new_document = LlamaDocument(
             doc_id=note.title,  # Ensure this is unique
-            content=note.note_text,
+            text=note.note_text,  
             metadata={"title": note.title}
         )
 
-        # Add the new document to the index
-        llama_index.insert_documents([new_document])
+        # Insert the new document into the index
+        llama_index.insert(new_document)
         logging.info(f"Inserted research note into llama_index for document '{note.title}'.")
 
         return {"status": "success"}
     except Exception as e:
         logging.error(f"Error saving research note: {e}")
         raise HTTPException(status_code=500, detail="An error occurred while saving the research note.")
+
 
 # Helper function: Get text embeddings (if needed)
 # Note: With llama_index, embeddings are handled internally.
