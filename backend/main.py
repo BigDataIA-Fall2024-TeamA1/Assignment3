@@ -7,7 +7,6 @@ import boto3
 from botocore.client import Config
 from urllib.parse import urlparse
 import logging
-import time
 from contextlib import asynccontextmanager
 
 # Import llama_index components
@@ -318,56 +317,3 @@ async def save_research_note(note: ResearchNote):
     except Exception as e:
         logging.error(f"Error saving research note: {e}")
         raise HTTPException(status_code=500, detail="An error occurred while saving the research note.")
-
-
-# Helper function: Get text embeddings (if needed)
-# Note: With llama_index, embeddings are handled internally.
-# However, if you still need direct access, you can define this function.
-
-def get_embedding(text):
-    try:
-        # Initialize the NVIDIA embeddings client
-        client = NVIDIAEmbedding(
-            model="nvidia/nv-embedqa-e5-v5", 
-            truncate="END"
-        )
-
-        # Generate the embedding for the input text
-        embedding = client.embed(text)
-        logging.info("Generated embedding for input text.")
-        
-        return embedding
-    except Exception as e:
-        logging.error(f"Error generating embedding: {e}")
-        raise
-
-# Helper function: Generate answer using NVIDIA model (if needed)
-# Note: With llama_index's query engine, the answer generation is handled.
-# However, if you still need direct access, you can define this function.
-
-def generate_answer_with_nvidia_model(question, context_list, api_key):
-    try:
-        # Initialize the NVIDIA model client
-        client = NVIDIA(
-            model="meta/llama-3.1-70b-instruct",
-            api_key=api_key, 
-            temperature=0.2,
-            top_p=0.7,
-            max_tokens=1024,
-        )
-
-        # Combine context_list into a single context string
-        context = ' '.join(context_list)
-        prompt = f"{context}\nQuestion: {question}\nAnswer:"
-
-        # Stream the response from the model
-        answer = ""
-        for chunk in client.stream([{"role": "user", "content": prompt}]):
-            answer += chunk.content
-
-        answer = answer.strip()
-        logging.info("Generated answer using NVIDIA model.")
-        return answer
-    except Exception as e:
-        logging.error(f"Error generating answer with NVIDIA model: {e}")
-        raise
