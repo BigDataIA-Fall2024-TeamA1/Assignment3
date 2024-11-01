@@ -131,20 +131,39 @@ Ensure all prerequisites are installed before proceeding to deployment.
 ## Contributions and Time Breakdown
 
 **Chiu Meng Che**:
-1. Created workflow diagrams illustrating the interaction between different components, such as Streamlit, FastAPI, Airflow, S3, and Pinecone. *(3 hours)*
-2. Developed Airflow DAGs to automate document ingestion and cloud storage in AWS S3. *(1.5 days)*
-3. Set up Dockerfiles for containerization and implemented Docker Compose for deployment. *(2 days)*
-4. Authored the initial README and improved documentation clarity. *(1.5 hours)*
+
+1. Use Airflow to automate the transfer of CFA publications to Amazon S3 and Snowflake. *(2.5 days)*
+2. Combine Snowflake, Pinecone, NVIDIA embedding model, and LLM model to implement the RAG process. *(3.5 days)*
+3. Project workflow graph. *(2 hours)*
+4. Deploy our services using Docker. *(2 hours)*
 
 **Shraddha Bhandarkar**:
+
 1. Integrated Azure Form Recognizer for extracting structured data from documents. *(3 days)*
 2. Implemented PyMuPDF for local PDF processing as an alternative to cloud services. *(8 hours)*
 3. Enhanced the Streamlit interface for smoother user experience and better data representation. *(10 hours)*
+4. Implemented incremental indexing using multi-modal RAG to index research notes incrementally for each document. *(1.5 days)*
+   - Maintained separate indexes for each document or implemented a hybrid search that filters based on document IDs.
+5. Improved search functionality to enhance user interaction. *(2 days)*
+   - Displayed saved research notes when revisiting a document.
+   - Enabled search within research notes specific to a document or across the entire document.
+   - Differentiated between searching through the document's full text and the research notes index.
+   - Allowed derived research notes to be added to the original research note index for continuous learning.
+6. Data ingestion and management for CFA publications. *(2.5 days)*
+   - **Scraped Data**: Extracted data from CFA Institute Research Foundation Publications, retrieving details like title, image, brief summary, and PDF file from each publication.
+   - **Stored Data**: Uploaded the retrieved images and PDF files to S3.
+   - **Database Setup**: Created a table in Snowflake with columns for title, brief summary, image link (S3), and PDF link (S3). Loaded the collected data into this table.
 
 **Kefan Zhang**:
-1. Developed FastAPI backend to handle API requests, integrating S3, Pinecone, and user authentication. *(30 hours)*
-2. Deployed the application on AWS EC2, conducting end-to-end testing and validation. *(4 hours)*
-3. Built additional functionality in Streamlit for better integration with backend services. *(16 hours)*
+
+1. Developed FastAPI endpoints to enable users to retrieve and explore stored documents, including metadata such as titles, summaries, and links to images and PDFs. *(2 hours)*
+2. Utilized NVIDIA’s embedding models to generate dense vector representations of documents, enhancing semantic search capabilities. *(2 days)*
+3. Stored the generated embeddings in Pinecone, facilitating efficient and accurate similarity-based retrieval. *(5 hours)*
+4. Incorporated inline references in the generated answers, linking directly to graphs, tables, and figures within the document. *(3 hours)*
+5. Enabled users to modify and personalize the generated research notes, providing a tailored experience that adds value to each interaction. *(1.5 days)*
+6. Codelab. *(3 hours)*
+
+
 
 ## Resources
 
@@ -158,6 +177,6 @@ Ensure all prerequisites are installed before proceeding to deployment.
 
 ## Codelabs Documentation
 
-[Click here to view the Codelabs documentation](https://codelabs-preview.appspot.com/?file_id=YOUR_FILE_ID#0)
+[Click here to view the Codelabs documentation](https://codelabs-preview.appspot.com/?file_id=1gBQts95I9VOnikyCroLEi9CNN_CU3dvoj7Q-2rhd6xU/edit?tab=t.0#0)
 
 
