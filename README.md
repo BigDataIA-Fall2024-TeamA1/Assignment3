@@ -1,8 +1,8 @@
-# AI-Driven Document Management System: End-to-End Automation and Research Insights
+# Automated Pipeline for Cloud-Based Financial Research Retrieval and Interactive Exploration with Multi-modal RAG
 
 ## Overview
 
-The AI-Driven Document Management System is a comprehensive, automated solution for managing, analyzing, and extracting data from research publications. Designed for scalability and efficiency, this project incorporates automated data scraping, storage, analysis, and user interaction capabilities, using cloud-based tools and advanced AI technologies. The system features Apache Airflow for automated workflows, FastAPI as the backend service, and Streamlit for the client-facing interface. The entire system is containerized using Docker Compose, enabling seamless deployment, scaling, and accessibility.
+This project automates the ingestion, processing, and retrieval of financial research publications from the CFA Institute Research Foundation, providing users with interactive document exploration and question-answering capabilities using a multi-modal Retrieval-Augmented Generation (RAG) model. It integrates cloud technologies for data storage and indexing, a client-facing application for exploration, and a robust search capability through Pinecone as the vector database.
 
 ## Attestation and Contribution Declaration
 
