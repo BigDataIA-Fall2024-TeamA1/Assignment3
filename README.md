@@ -141,13 +141,13 @@ Ensure all prerequisites are installed before proceeding to deployment.
 
 1. Improved search functionality to enhance user interaction. (2 days)
 
-2. Displayed saved research notes when revisiting a document.
+2. Displayed saved research notes when revisiting a document. (1 day)
 
-3. Enabled search within research notes specific to a document or across the entire document.
+3. Enabled search within research notes specific to a document or across the entire document. (1 day)
 
-4. Differentiated between searching through the document's full text and the research notes index.
+4. Differentiated between searching through the document's full text and the research notes index. (1 day)
 
-5. Allowed derived research notes to be added to the original research note index for continuous learning.
+5. Allowed derived research notes to be added to the original research note index for continuous learning. (1 day)
 
 6. Managed data ingestion for CFA publications. (2.5 days)
 
