@@ -3,21 +3,19 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import snowflake.connector
 from dotenv import load_dotenv
-import boto3
-from botocore.client import Config
-from urllib.parse import urlparse
 import logging
 from contextlib import asynccontextmanager
+from typing import List
 
 # Import llama_index components
-from llama_index.core import Settings  # Updated import
+from llama_index.core import Settings
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.nvidia import NVIDIAEmbedding
 from llama_index.llms.nvidia import NVIDIA
 
-from pinecone import Pinecone  # Import Pinecone client
+from pinecone import Pinecone
 from llama_index.core.schema import Document as LlamaDocument
 
 # Load environment variables
@@ -78,31 +76,19 @@ def initialize_pinecone_connection():
 # Create and initialize the index using llama_index with Pinecone
 def create_llama_index(documents):
     try:
-        # Initialize Pinecone Vector Store
         vector_store = PineconeVectorStore(
             index_name=os.getenv("PINECONE_INDEX_NAME"),
-            dimension=768  # Ensure this matches the embedding dimension
+            dimension=768
         )
-        logging.info("PineconeVectorStore initialized successfully.")
-
-        # Create StorageContext with the VectorStore
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-        # Create VectorStoreIndex from documents using the storage_context
-        index = VectorStoreIndex.from_documents(
-            documents,
-            storage_context=storage_context
-        )
+        index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
         logging.info("VectorStoreIndex created successfully with Pinecone.")
-        logging.info(f"Total documents indexed: {len(documents)}")
-        
         return index
     except Exception as e:
         logging.error(f"Failed to create VectorStoreIndex with Pinecone: {e}")
         raise
 
-
-# Function to load documents from Snowflake
+# Load documents from Snowflake
 def load_documents_from_snowflake():
     try:
         conn = init_snowflake()
@@ -110,11 +96,7 @@ def load_documents_from_snowflake():
         cursor.execute("SELECT TITLE, NOTE_TEXT FROM RESEARCH_NOTES;")
         rows = cursor.fetchall()
         documents = [
-            LlamaDocument(
-                doc_id=row[0],  # Assuming TITLE is unique and can serve as doc_id
-                text=row[1],     # Changed from 'content' to 'text'
-                metadata={"title": row[0]}
-            )
+            LlamaDocument(doc_id=row[0], text=row[1], metadata={"title": row[0]})
             for row in rows
         ]
         cursor.close()
@@ -130,42 +112,112 @@ def load_documents_from_snowflake():
 async def lifespan(app: FastAPI):
     global llama_index
     try:
-        initialize_pinecone_connection()  # Initialize Pinecone connection first
-        initialize_llama_index_settings()  # Configure LlamaIndex settings
-        documents = load_documents_from_snowflake()  # Load documents from Snowflake
-        llama_index = create_llama_index(documents)  # Create the index
+        initialize_pinecone_connection()
+        initialize_llama_index_settings()
+        documents = load_documents_from_snowflake()
+        llama_index = create_llama_index(documents)
         yield
     finally:
-        # Shutdown actions (if any)
         if llama_index:
-            # Perform any necessary cleanup for llama_index
             del llama_index
         logging.info("Application shutdown complete.")
 
 # Attach the lifespan to the FastAPI app
 app = FastAPI(lifespan=lifespan)
 
-# Define data models
-class ResearchDocument(BaseModel):
+# Data Models
+class ModifiedAnswerRequest(BaseModel):
     title: str
-    note_text: str
+    modified_answer: str
 
-class Query(BaseModel):
-    question: str  # Removed 'title' as it's unused
+class ResearchNoteResponse(BaseModel):
+    title: str
+    notes: List[str]
 
-class ResearchNote(BaseModel):
-    title: str  # Use document title as identifier
-    note_text: str
+# Save Modified Answer as Research Note
+@app.post("/save_modified_answer")
+async def save_modified_answer(request: ModifiedAnswerRequest):
+    try:
+        conn = init_snowflake()
+        cursor = conn.cursor()
+        insert_query = "INSERT INTO RESEARCH_NOTES (TITLE, NOTE_TEXT) VALUES (%s, %s);"
+        cursor.execute(insert_query, (request.title, request.modified_answer))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logging.info(f"Modified answer saved as research note for document '{request.title}'.")
 
-# Get list of documents
+        # Retrieve all saved research notes for this document
+        research_notes = get_research_notes(request.title)
+        return {"status": "Modified answer saved successfully", "research_notes": research_notes}
+    except Exception as e:
+        logging.error(f"Error saving modified answer: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while saving the modified answer.")
+
+# Fetch Research Notes for a Document
+@app.get("/view_research_notes/{title}", response_model=ResearchNoteResponse)
+async def view_research_notes(title: str):
+    try:
+        research_notes = get_research_notes(title)
+        return {"title": title, "notes": research_notes}
+    except Exception as e:
+        logging.error(f"Error retrieving research notes: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while retrieving research notes.")
+
+# Helper function to fetch research notes from Snowflake
+def get_research_notes(title: str) -> List[str]:
+    try:
+        conn = init_snowflake()
+        cursor = conn.cursor()
+        query = "SELECT NOTE_TEXT FROM RESEARCH_NOTES WHERE TITLE = %s;"
+        cursor.execute(query, (title,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        logging.info(f"Fetched {len(rows)} research notes for title: {title}")
+        return [row[0] for row in rows]
+    except Exception as e:
+        logging.error(f"Error fetching research notes: {e}")
+        raise
+
+# Search within Research Notes
+@app.get("/search_research_notes/{title}")
+async def search_research_notes(title: str, query: str):
+    try:
+        research_notes = get_research_notes(title)
+        matching_notes = [
+            note for note in research_notes
+            if query.lower().strip() in note.lower().strip()
+        ]
+        return {"title": title, "matching_notes": matching_notes}
+    except Exception as e:
+        logging.error(f"Error searching research notes: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while searching research notes.")
+
+# Search Full Text of the Document
+@app.get("/search_full_text/{title}")
+async def search_full_text(title: str, query: str):
+    try:
+        if llama_index is None:
+            logging.error("llama_index is not initialized.")
+            raise HTTPException(status_code=500, detail="Service not initialized.")
+
+        query_engine = llama_index.as_query_engine(similarity_top_k=5, streaming=False)
+        response = query_engine.query(query)
+        return {"title": title, "results": response.response if hasattr(response, 'response') else str(response)}
+    except Exception as e:
+        logging.error(f"Error in full-text search: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred during full-text search.")
+
+# Get List of Documents
 @app.get("/documents")
 async def get_documents():
     try:
         conn = init_snowflake()
         cursor = conn.cursor()
-        cursor.execute("SELECT TITLE FROM PUBLICATIONS_METADATA;")
+        cursor.execute("SELECT TITLE, PDF_URL FROM PUBLICATIONS_METADATA;")
         rows = cursor.fetchall()
-        documents = [{"title": row[0]} for row in rows]
+        documents = [{"title": row[0], "pdf_url": row[1]} for row in rows]
         cursor.close()
         conn.close()
         logging.info(f"Retrieved {len(documents)} documents.")
@@ -174,146 +226,67 @@ async def get_documents():
         logging.error(f"Error retrieving documents: {e}")
         raise HTTPException(status_code=500, detail="An error occurred while retrieving documents.")
 
-# Get document details
-@app.get("/documents/{title}")
-async def get_document_details(title: str):
+# Generate Summary for a Document
+@app.get("/documents/{title}/summary")
+async def generate_summary(title: str):
     try:
         conn = init_snowflake()
         cursor = conn.cursor()
-        query = "SELECT TITLE, SUMMARY, IMAGE_URL, PDF_URL FROM PUBLICATIONS_METADATA WHERE TITLE = %s;"
-        cursor.execute(query, (title,))
+        cursor.execute("SELECT SUMMARY, IMAGE_URL, PDF_URL FROM PUBLICATIONS_METADATA WHERE TITLE = %s;", (title,))
         row = cursor.fetchone()
+        
         if row:
-            document = {
-                "title": row[0],
-                "summary": row[1],
-                "image_url": row[2],
-                "pdf_url": row[3],
-            }
-            logging.info(f"Retrieved details for document '{title}'.")
+            summary = row[0] if row[0] else "No summary available for this document."
+            image_url = row[1]
+            pdf_url = row[2]
         else:
-            logging.warning(f"Document '{title}' not found.")
-            raise HTTPException(status_code=404, detail="Document not found")
+            summary = "No summary available for this document."
+            image_url = None
+            pdf_url = None
+        
         cursor.close()
         conn.close()
-
-        # Generate pre-signed URLs for image and PDF
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.getenv('AWS_REGION'),
-            config=Config(signature_version='s3v4')
-        )
-        bucket_name = os.getenv('AWS_BUCKET')
-
-        # Extract object key from URL
-        def get_s3_object_key(url):
-            parsed_url = urlparse(url)
-            # Remove leading '/' from the path
-            object_key = parsed_url.path.lstrip('/')
-            # Remove bucket name from path if included
-            if object_key.startswith(bucket_name + '/'):
-                object_key = object_key[len(bucket_name) + 1:]
-            return object_key
-
-        try:
-            image_key = get_s3_object_key(document['image_url'])
-            image_url = s3_client.generate_presigned_url(
-                'get_object',
-                Params={'Bucket': bucket_name, 'Key': image_key},
-                ExpiresIn=3600
-            )
-            document['image_url'] = image_url
-            logging.info(f"Generated pre-signed URL for image of document '{title}'.")
-        except Exception as e:
-            logging.error(f"Error generating pre-signed URL for image: {e}")
-            document['image_url'] = None
-
-        try:
-            pdf_key = get_s3_object_key(document['pdf_url'])
-            pdf_url = s3_client.generate_presigned_url(
-                'get_object',
-                Params={'Bucket': bucket_name, 'Key': pdf_key},
-                ExpiresIn=3600
-            )
-            document['pdf_url'] = pdf_url
-            logging.info(f"Generated pre-signed URL for PDF of document '{title}'.")
-        except Exception as e:
-            logging.error(f"Error generating pre-signed URL for PDF: {e}")
-            document['pdf_url'] = None
-
-        return document
-    except HTTPException as he:
-        raise he
+        
+        return {"summary": summary, "image_url": image_url, "pdf_url": pdf_url}
     except Exception as e:
-        logging.error(f"Error retrieving document details: {e}")
-        raise HTTPException(status_code=500, detail="An error occurred while retrieving document details.")
+        logging.error(f"Error generating summary: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating summary.")
 
-# Submit a user question and return an answer
+# Ask a Question
+class AskQuestionRequest(BaseModel):
+    title: str
+    question: str
+
 @app.post("/ask")
-async def ask_question(query: Query):
+async def ask_question(request: AskQuestionRequest):
     try:
         if llama_index is None:
             logging.error("llama_index is not initialized.")
             raise HTTPException(status_code=500, detail="Service not initialized.")
         
-        # Use the globally initialized llama_index
+        title = request.title
+        question = request.question
         query_engine = llama_index.as_query_engine(similarity_top_k=5, streaming=False)
-        logging.info(f"Executing query: {query.question}")
+        response = query_engine.query(question)
 
-        response = query_engine.query(query.question)
-        logging.info(f"Raw response from query engine: {response}")
-
-        # Check if response is None or empty
         if response is None:
-            logging.error("Received empty response from query engine.")
             raise HTTPException(status_code=500, detail="No response from the query engine.")
 
-        # Extract the answer
-        if hasattr(response, 'response'):
-            answer = response.response
-        else:
-            answer = str(response)  # Fallback if 'response' attribute doesn't exist
+        conn = init_snowflake()
+        cursor = conn.cursor()
+        cursor.execute("SELECT IMAGE_URL, PDF_URL FROM PUBLICATIONS_METADATA WHERE TITLE = %s;", (title,))
+        row = cursor.fetchone()
+        image_url = row[0] if row else None
+        pdf_url = row[1] if row else None
+        cursor.close()
+        conn.close()
 
-        logging.info(f"Generated answer for question: {answer}")
-        return {"answer": answer}
-
+        answer = response.response if hasattr(response, 'response') else str(response)
+        formatted_answer = f"**Research Note**: {answer}\n\n"
+        
+        return {"answer": formatted_answer, "image_url": image_url, "pdf_url": pdf_url}
     except HTTPException as he:
         raise he
     except Exception as e:
         logging.error(f"Error processing question: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while processing the question.")
-
-# Save research note
-@app.post("/save_note")
-async def save_research_note(note: ResearchNote):
-    try:
-        # Save note to Snowflake
-        conn = init_snowflake()
-        cursor = conn.cursor()
-        insert_query = """
-        INSERT INTO RESEARCH_NOTES (TITLE, NOTE_TEXT)
-        VALUES (%s, %s);
-        """
-        cursor.execute(insert_query, (note.title, note.note_text))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        logging.info(f"Saved research note for document '{note.title}' to Snowflake.")
-
-        # Create a Document object
-        new_document = LlamaDocument(
-            doc_id=note.title,  # Ensure this is unique
-            text=note.note_text,  
-            metadata={"title": note.title}
-        )
-
-        # Insert the new document into the index
-        llama_index.insert(new_document)
-        logging.info(f"Inserted research note into llama_index for document '{note.title}'.")
-
-        return {"status": "success"}
-    except Exception as e:
-        logging.error(f"Error saving research note: {e}")
-        raise HTTPException(status_code=500, detail="An error occurred while saving the research note.")

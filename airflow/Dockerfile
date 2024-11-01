@@ -1,14 +1,21 @@
 # airflow/Dockerfile
 FROM python:3.10-slim
 
+# 安裝系統依賴
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # 設置工作目錄
 WORKDIR /app/airflow
 
 # 複製依賴文件
 COPY airflow/pyproject.toml airflow/poetry.lock /app/airflow/
 
-# 安裝 Poetry 及依賴
-RUN pip install poetry && \
+# 升級 pip 並安裝 Poetry 及依賴
+RUN pip install --upgrade pip && \
+    pip install poetry && \
     poetry config virtualenvs.create false && \
     poetry install --no-dev
 
