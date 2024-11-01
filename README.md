@@ -139,20 +139,18 @@ Ensure all prerequisites are installed before proceeding to deployment.
 
 **Shraddha Bhandarkar**:
 
-1. Integrated Azure Form Recognizer for extracting structured data from documents. *(3 days)*
-2. Implemented PyMuPDF for local PDF processing as an alternative to cloud services. *(8 hours)*
-3. Enhanced the Streamlit interface for smoother user experience and better data representation. *(10 hours)*
-4. Implemented incremental indexing using multi-modal RAG to index research notes incrementally for each document. *(1.5 days)*
-   - Maintained separate indexes for each document or implemented a hybrid search that filters based on document IDs.
-5. Improved search functionality to enhance user interaction. *(2 days)*
-   - Displayed saved research notes when revisiting a document.
-   - Enabled search within research notes specific to a document or across the entire document.
-   - Differentiated between searching through the document's full text and the research notes index.
-   - Allowed derived research notes to be added to the original research note index for continuous learning.
-6. Data ingestion and management for CFA publications. *(2.5 days)*
-   - **Scraped Data**: Extracted data from CFA Institute Research Foundation Publications, retrieving details like title, image, brief summary, and PDF file from each publication.
-   - **Stored Data**: Uploaded the retrieved images and PDF files to S3.
-   - **Database Setup**: Created a table in Snowflake with columns for title, brief summary, image link (S3), and PDF link (S3). Loaded the collected data into this table.
+1. Improved search functionality to enhance user interaction. (2 days)
+
+2. Displayed saved research notes when revisiting a document.
+
+3. Enabled search within research notes specific to a document or across the entire document.
+
+4. Differentiated between searching through the document's full text and the research notes index.
+
+5. Allowed derived research notes to be added to the original research note index for continuous learning.
+
+6. Managed data ingestion for CFA publications. (2.5 days)
+
 
 **Kefan Zhang**:
 
