@@ -1,0 +1,29 @@
+│  .env
+│  .gitignore
+│  project_tree_structure
+│  
+├─airflow
+│  │  airflow.cfg
+│  │  poetry.lock
+│  │  pyproject.toml
+│  │  
+│  └─dags
+│     │  pipeline.py
+│     │  
+│     └─modules
+│        │  cfa_scrape_data.py
+│        └─  __init__.py
+├─backend
+│  │  delete_vector.py
+│  │  document_processors.py
+│  │  insert_vector.py
+│  │  main.py
+│  │  poetry.lock
+│  └─  pyproject.toml
+│
+├─frontend
+│      poetry.lock
+│      pyproject.toml
+│      streamlit_app.py
+│
+└─images
