@@ -11,6 +11,10 @@ API_BASE_URL = "http://localhost:8000"  # Set this to match FastAPI server URL
 def main():
     st.title("Research Publications Explorer")
 
+    # Initialize session state for modified_answer
+    if 'modified_answer' not in st.session_state:
+        st.session_state.modified_answer = ""  
+
     # Fetch document list
     st.subheader("Explore Documents")
     response = requests.get(f"{API_BASE_URL}/documents")
@@ -19,11 +23,6 @@ def main():
         doc_titles = [doc["title"] for doc in documents]
         selected_title = st.selectbox("Select a document", doc_titles)
         
-        # Download selected document
-        if selected_title:
-            selected_doc = next(doc for doc in documents if doc["title"] == selected_title)
-            if "pdf_url" in selected_doc:
-                st.write(f"[Download PDF]({selected_doc['pdf_url']})")
     else:
         st.error("Failed to retrieve documents")
         return
@@ -63,18 +62,23 @@ def main():
             if answer_response.status_code == 200:
                 answer_data = answer_response.json()
                 answer = answer_data.get("answer", "No answer available.")
+                
+                # 将 **Research Note** 替换为用户输入的问题
+                modified_initial_answer = answer.replace("**Research Note**", f"**{user_question}**")
+                
                 st.write("Generated Answer:")
-                st.write(answer, unsafe_allow_html=True)
+                st.write(modified_initial_answer, unsafe_allow_html=True)
 
                 # Display answer in Modify and Save section with URLs
                 st.subheader("Modify and Save Answer")
-                # 初始化 st.session_state
-                if "modified_answer" not in st.session_state:
-                    st.session_state.modified_answer = f"{answer}\n\n[Document Image]({answer_data.get('image_url', '#')})\n\n[Download PDF]({answer_data.get('pdf_url', '#')})"
-                st.session_state.modified_answer = st.text_area(
-                    "Edit the generated answer:", 
-                    value=st.session_state.modified_answer
+                
+                # Update session state with modified initial answer and URLs
+                st.session_state.modified_answer = (
+                    f"{modified_initial_answer}\n\n[Document Image]({answer_data.get('image_url', '#')})\n\n[Download PDF]({answer_data.get('pdf_url', '#')})"
                 )
+
+                # Bind text_area to session state
+                st.text_area("Edit the generated answer:", key="modified_answer")
             else:
                 st.error("Failed to retrieve answer")
         else:
