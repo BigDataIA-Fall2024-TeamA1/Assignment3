@@ -6,3 +6,4 @@ airflow/dags/__pycache__/
 airflow/dags/modules/__pycache__/
 airflow/dags/modules/try.py
 backend/try.py
+backend/__pycache__
